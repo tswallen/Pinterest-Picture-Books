@@ -28,9 +28,15 @@ at the bottom, or click the numbered tabs directly.
 ## The three tabs
 
 ### 1 · Login  *(optional)*
-Enter your Pinterest email + password to list **your** boards. Login uses
-`py3-pinterest`'s browser-based cookie flow (a headless Chrome window), and the
+Enter your email + password to list **your** boards. When you press **Log in** a
+Chrome window opens at the login page: the tool tries to autofill and submit,
+but if the clone's form differs it just waits for you to **sign in manually** in
+that window — either way it captures your session cookies once you're in. The
 session is cached in `data/` so you rarely need to log in again.
+
+> Manual-assisted login means it works even when the clone's login page doesn't
+> match Pinterest's DOM. Set `"login_headless": true` in `config.json` only if
+> you're sure the autofill selectors match (there's no window for manual entry).
 
 **Skip** this step if you only want public boards (added by URL in tab 2) or if
 you already have downloaded pin data.

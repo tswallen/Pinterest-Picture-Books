@@ -68,15 +68,42 @@ class ClonePinterest(Pinterest):
         super().__init__(*args, **kwargs)
         self._login_url = login_url
 
-    def login(self, headless: bool = True, wait_time: int = 15, lang: str = "en"):
+    # Selectors we try when autofilling. Kept broad so a clone whose login
+    # form differs slightly from Pinterest's still gets filled in.
+    _EMAIL_SELECTORS = (
+        "#email", "input[name='email']", "input[type='email']",
+        "input[name='username']", "input[id*='email']",
+    )
+    _PASSWORD_SELECTORS = (
+        "#password", "input[name='password']", "input[type='password']",
+        "input[id*='password']",
+    )
+    _SUBMIT_SELECTORS = (
+        "button[type='submit']", "input[type='submit']",
+        "button[data-test-id='registerFormSubmitButton']",
+    )
+
+    def login(self, headless: bool = False, wait_time: int = 180, lang: str = "en"):
+        """Open a browser at the clone's login page and capture the session.
+
+        The window is visible by default: we *try* to autofill and submit the
+        form, but if the clone's DOM differs we simply wait for the user to
+        finish logging in manually. Success is detected by the login form
+        disappearing or the page navigating away from the login URL, after
+        which every cookie is harvested into the session registry.
+
+        Set ``headless=True`` only when you are confident the autofill
+        selectors match (there is no window to complete a manual login in).
+        """
         # Imported lazily so the app can run (and download from cache) on
         # machines without Selenium/Chrome installed.
+        import time
+        from urllib.parse import urlparse as _urlparse
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options as ChromeOptions
         from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.keys import Keys
         from webdriver_manager.chrome import ChromeDriverManager
 
         options = ChromeOptions()
@@ -85,34 +112,77 @@ class ClonePinterest(Pinterest):
             options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        # Keep the window from closing itself and reduce automation banners.
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
+
+        def _find(selectors):
+            for sel in selectors:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    try:
+                        if el.is_displayed():
+                            return el
+                    except Exception:
+                        continue
+            return None
+
         try:
             driver.get(self._login_url)
+            time.sleep(1.0)
 
             # Dismiss a cookie-consent banner if the clone shows one.
             try:
-                btn = WebDriverWait(driver, 4).until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, "//button[contains(., 'Accept')]")
-                    )
-                )
-                btn.click()
+                for btn in driver.find_elements(
+                    By.XPATH, "//button[contains(., 'Accept')]"
+                ):
+                    if btn.is_displayed():
+                        btn.click()
+                        break
             except Exception:
                 pass
 
-            WebDriverWait(driver, wait_time).until(
-                EC.element_to_be_clickable((By.ID, "email"))
-            )
-            driver.find_element(By.ID, "email").send_keys(self.email)
-            driver.find_element(By.ID, "password").send_keys(self.password)
-            driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
+            # Best-effort autofill + submit. Any failure just leaves the form
+            # for the user to complete by hand in the open window.
+            try:
+                email_el = _find(self._EMAIL_SELECTORS)
+                pw_el = _find(self._PASSWORD_SELECTORS)
+                if email_el and self.email:
+                    email_el.clear()
+                    email_el.send_keys(self.email)
+                if pw_el and self.password:
+                    pw_el.clear()
+                    pw_el.send_keys(self.password)
+                    submit = _find(self._SUBMIT_SELECTORS)
+                    if submit:
+                        submit.click()
+                    else:
+                        pw_el.send_keys(Keys.RETURN)
+            except Exception:
+                pass  # user finishes manually
 
-            WebDriverWait(driver, wait_time).until(
-                EC.invisibility_of_element_located((By.ID, "email"))
-            )
+            # Wait for login to complete (autofilled or manual).
+            start_path = _urlparse(self._login_url).path.rstrip("/")
+            deadline = time.time() + wait_time
+            while time.time() < deadline:
+                time.sleep(1.0)
+                try:
+                    cur_path = _urlparse(driver.current_url).path.rstrip("/")
+                except Exception:
+                    cur_path = start_path
+                if cur_path != start_path:
+                    break  # navigated away from the login page
+                if _find(self._PASSWORD_SELECTORS) is None:
+                    break  # login form is gone
+            else:
+                raise TimeoutError(
+                    "Timed out waiting for login to complete. Finish signing in "
+                    "in the browser window, then try again."
+                )
 
+            time.sleep(1.5)  # let post-login cookies settle
             self.http.cookies.clear()
             for cookie in driver.get_cookies():
                 self.http.cookies.set(cookie["name"], cookie["value"])
@@ -127,11 +197,13 @@ class ClonePinterest(Pinterest):
 class PinterestClient:
     """High-level operations used by the Eel backend."""
 
-    def __init__(self, base_url: str, login_url: str, cred_root: str):
+    def __init__(self, base_url: str, login_url: str, cred_root: str,
+                 login_headless: bool = False):
         configure_host(base_url)
         self.base_url = base_url.rstrip("/")
         self.login_url = login_url
         self.cred_root = cred_root
+        self.login_headless = login_headless
         self._pin: ClonePinterest | None = None
         self.username: str | None = None
 
@@ -149,12 +221,26 @@ class PinterestClient:
     def login(self, email: str, password: str) -> str:
         """Log in and return the resolved username. Raises on failure."""
         pin = self._client(email=email, password=password)
-        pin.login(headless=True)
+        try:
+            pin.login(headless=self.login_headless)
+        except Exception as exc:
+            raise RuntimeError(_friendly_login_error(exc)) from exc
+
         # Confirm the session works and discover the username.
-        overview = pin.get_user_overview()
+        try:
+            overview = pin.get_user_overview()
+        except Exception:
+            raise RuntimeError(
+                "Signed in, but the session couldn't be verified against "
+                f"{self.base_url}. Check that config.json 'base_url' points at "
+                "your clone's API host."
+            )
         username = overview.get("username") or overview.get("owner", {}).get("username")
         if not username:
-            raise RuntimeError("Login did not establish a valid session.")
+            raise RuntimeError(
+                "Login did not establish a valid session — the login page "
+                "closed before a session cookie was set."
+            )
         pin.username = username
         self._pin = pin
         self.username = username
@@ -263,6 +349,27 @@ class PinterestClient:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+def _friendly_login_error(exc: Exception) -> str:
+    """Translate a raw Selenium/WebDriver failure into a one-line hint."""
+    text = str(exc)
+    low = text.lower()
+    if isinstance(exc, TimeoutError) or "timed out waiting for login" in low:
+        return str(exc)
+    if "chromedriver" in low or "session not created" in low or "chrome" in low:
+        if "version" in low or "session not created" in low:
+            return ("Chrome/ChromeDriver version mismatch. Update Google Chrome "
+                    "(or delete the cached driver) and try again.")
+        return ("Couldn't drive Chrome for login. Make sure Google Chrome is "
+                "installed. A browser window should open — complete the login "
+                "there and it will be captured.")
+    if "no such element" in low or "element" in low:
+        return ("The clone's login form doesn't match the fields we autofill. "
+                "A browser window is open — sign in manually and it will be "
+                "captured automatically.")
+    # Fall back to a compact first line instead of the full stacktrace.
+    return "Login failed: " + text.strip().splitlines()[0][:200]
+
+
 def _slugify(text: str) -> str:
     text = (text or "").strip().lower()
     text = re.sub(r"[^\w\s-]", "", text)

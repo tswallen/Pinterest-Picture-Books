@@ -96,8 +96,13 @@ async function doLogin() {
   }
   const btn = $("#login-btn");
   btn.disabled = true;
-  btn.textContent = "Logging in… (a browser window may open)";
+  btn.textContent = "Logging in…";
+  const waiting = toast(
+    "A Chrome window is opening. If it isn't filled in automatically, sign in " +
+    "there manually — we'll capture your session when you're done.",
+    "info", { sticky: true });
   const res = await eel.do_login(email, password)();
+  waiting.remove();
   btn.disabled = false;
   btn.textContent = "Log in";
   if (res.ok) {

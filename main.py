@@ -46,6 +46,7 @@ client = PinterestClient(
     base_url=CONFIG.get("base_url", "https://www.pinterest.com"),
     login_url=CONFIG.get("login_url", "https://www.pinterest.com/login"),
     cred_root=os.path.join(ROOT, CONFIG.get("cred_root", "data")),
+    login_headless=bool(CONFIG.get("login_headless", False)),
 )
 
 
@@ -300,7 +301,14 @@ def export_pdf(options):
         fh.write(document)
     doc_url = f"http://127.0.0.1:{IMG_PORT}/_book_preview.html"
 
-    pdf_bytes = _render_pdf(doc_url, options)
+    try:
+        pdf_bytes = _render_pdf(doc_url, options)
+    except Exception as exc:
+        first = str(exc).strip().splitlines()[0][:200]
+        return _err(
+            "PDF export needs headless Chrome and it failed to run "
+            f"({first}). You can still use 🖨 Print → “Save as PDF”."
+        )
     name = (options.get("book_title") or "picture-book").strip().replace(" ", "-")
     out_path = os.path.join(OUTPUT_DIR, f"{name}.pdf")
     with open(out_path, "wb") as fh:

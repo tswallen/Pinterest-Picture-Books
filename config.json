@@ -1,6 +1,7 @@
 {
   "base_url": "https://www.pinterest.com",
   "login_url": "https://www.pinterest.com/login",
+  "login_headless": false,
   "cred_root": "data",
   "output_dir": "output",
   "image_server_port": 8123,
