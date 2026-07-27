@@ -118,12 +118,13 @@ def init_app():
 
 @eel.expose
 @safe
-def do_login(email, password):
-    username = client.login(email, password)
-    state = storage.load_state()
-    state["username"] = username
-    storage.save_state(state)
-    return _ok(username=username)
+def do_login(email, password, username=""):
+    result = client.login(email, password, username)
+    if result.get("username"):
+        state = storage.load_state()
+        state["username"] = result["username"]
+        storage.save_state(state)
+    return _ok(**result)
 
 
 # --------------------------------------------------------------------------- #

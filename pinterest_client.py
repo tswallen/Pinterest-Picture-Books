@@ -187,8 +187,38 @@ class ClonePinterest(Pinterest):
             for cookie in driver.get_cookies():
                 self.http.cookies.set(cookie["name"], cookie["value"])
             self.registry.update_all(self.http.cookies.get_dict())
+
+            # Best-effort: read the logged-in username straight from the page,
+            # so the user doesn't have to type it. Never fatal.
+            self.discovered_username = self._discover_username(driver, By)
         finally:
             driver.quit()
+
+    def _discover_username(self, driver, By) -> str | None:
+        """Try to read the current user's username from the logged-in page."""
+        from urllib.parse import urlparse as _urlparse
+        import time
+        base_root = self._login_url.split("/login")[0].rstrip("/") or self._login_url
+        reserved = {"login", "logout", "settings", "pin", "search", "ideas",
+                    "today", "news", "resource", "business", "help", ""}
+        try:
+            driver.get(base_root + "/")
+            time.sleep(1.5)
+            selectors = (
+                "[data-test-id='header-profile'] a",
+                "a[data-test-id='user-profile-link']",
+                "div[data-test-id='user-menu'] a[href^='/']",
+                "header a[href^='/']",
+            )
+            for sel in selectors:
+                for a in driver.find_elements(By.CSS_SELECTOR, sel):
+                    href = (a.get_attribute("href") or "").rstrip("/")
+                    seg = _urlparse(href).path.strip("/")
+                    if seg and "/" not in seg and seg not in reserved:
+                        return seg
+        except Exception:
+            pass
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -218,49 +248,65 @@ class PinterestClient:
             login_url=self.login_url,
         )
 
-    def login(self, email: str, password: str) -> str:
-        """Log in and return the resolved username. Raises on failure."""
-        pin = self._client(email=email, password=password)
+    def login(self, email: str, password: str, username: str = "") -> dict:
+        """Log in via the browser and store the session.
+
+        Returns {"username": <str-or-empty>, "verified": <bool>}. The only thing
+        that raises is a genuine login failure (Chrome/driver problem or the
+        user never completing the form). Not knowing the username, or the
+        optional profile check failing, is *never* fatal -- the cookies are what
+        matter, and everything except listing your own boards works without a
+        username anyway.
+        """
+        username = (username or "").strip().lstrip("@")
+        pin = self._client(email=email, password=password, username=username)
         try:
             pin.login(headless=self.login_headless)
         except Exception as exc:
             raise RuntimeError(_friendly_login_error(exc)) from exc
 
-        # Confirm the session works and discover the username.
-        try:
-            overview = pin.get_user_overview()
-        except Exception:
-            raise RuntimeError(
-                "Signed in, but the session couldn't be verified against "
-                f"{self.base_url}. Check that config.json 'base_url' points at "
-                "your clone's API host."
-            )
-        username = overview.get("username") or overview.get("owner", {}).get("username")
-        if not username:
-            raise RuntimeError(
-                "Login did not establish a valid session — the login page "
-                "closed before a session cookie was set."
-            )
-        pin.username = username
+        # Resolve the username: use what the user typed, else what we scraped
+        # from the logged-in page.
+        resolved = username or (getattr(pin, "discovered_username", None) or "")
+        pin.username = resolved
         self._pin = pin
-        self.username = username
-        return username
+        self.username = resolved or None
+
+        # Optional, non-fatal greeting check (also fills in the username if the
+        # profile endpoint happens to be available and we still don't have one).
+        verified = False
+        if resolved:
+            try:
+                overview = pin.get_user_overview()
+                if overview and overview.get("username"):
+                    self.username = pin.username = overview["username"]
+                    verified = True
+            except Exception:
+                pass  # cookies are still good; listing may just be limited
+        return {"username": self.username or "", "verified": verified}
 
     def resume_session(self, username: str) -> bool:
-        """Reuse cookies persisted in cred_root for a known username.
+        """Reuse cookies persisted in cred_root from a previous login.
 
-        Returns True if the stored session is still valid.
+        Returns True if a stored session exists. When we know the username we
+        verify it against the profile endpoint; otherwise we simply trust the
+        stored cookies (verification is best-effort, never a gate).
         """
+        username = (username or "").strip()
         pin = self._client(username=username)
-        try:
-            overview = pin.get_user_overview()
-            if overview and overview.get("username"):
-                self._pin = pin
-                self.username = overview["username"]
-                return True
-        except Exception:
-            pass
-        return False
+        # No cookies persisted -> nothing to resume.
+        if not pin.http.cookies.get_dict():
+            return False
+        if username:
+            try:
+                overview = pin.get_user_overview()
+                if overview and overview.get("username"):
+                    self.username = pin.username = overview["username"]
+            except Exception:
+                pass
+        self._pin = pin
+        self.username = self.username or (username or None)
+        return True
 
     @property
     def logged_in(self) -> bool:
@@ -271,6 +317,11 @@ class PinterestClient:
         """Return all boards for the logged-in user."""
         if not self._pin:
             raise RuntimeError("Not logged in.")
+        if not self._pin.username:
+            raise RuntimeError(
+                "You're signed in, but we couldn't detect your username. Type it "
+                "in the Username field on the Login tab (or add boards by URL)."
+            )
         boards, seen = [], set()
         self._pin.bookmark_manager.reset_bookmark(
             primary="boards", secondary=self._pin.username

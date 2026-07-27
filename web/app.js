@@ -90,6 +90,7 @@ function updateNav() {
 async function doLogin() {
   const email = $("#login-email").value.trim();
   const password = $("#login-password").value;
+  const username = $("#login-username").value.trim();
   if (!email || !password) {
     toast("Enter your email and password.", "error");
     return;
@@ -101,17 +102,23 @@ async function doLogin() {
     "A Chrome window is opening. If it isn't filled in automatically, sign in " +
     "there manually — we'll capture your session when you're done.",
     "info", { sticky: true });
-  const res = await eel.do_login(email, password)();
+  const res = await eel.do_login(email, password, username)();
   waiting.remove();
   btn.disabled = false;
   btn.textContent = "Log in";
   if (res.ok) {
     App.loggedIn = true;
-    App.username = res.username;
+    App.username = res.username || null;
+    const who = res.username ? `as ${res.username}` : "(username not detected)";
     $("#login-status").innerHTML =
-      `<span class="text-emerald-600 font-medium">✓ Logged in as ${res.username}</span>`;
-    toast(`Logged in as ${res.username}`, "success");
-    await loadUserBoards();
+      `<span class="text-emerald-600 font-medium">✓ Logged in ${who}</span>`;
+    toast(`Logged in ${who}`, "success");
+    if (res.username) {
+      await loadUserBoards();
+    } else {
+      toast("Signed in. Add the Username above to list your own boards, " +
+            "or add boards by URL on the next tab.", "info", { duration: 7000 });
+    }
     updateNav();
   } else {
     toast(res.error || "Login failed.", "error", { duration: 6000 });
@@ -369,10 +376,11 @@ async function boot() {
     App.downloaded = res.downloaded || [];
     if (res.logged_in) {
       App.loggedIn = true;
-      App.username = res.username;
+      App.username = res.username || null;
+      const who = res.username ? `as ${res.username}` : "(username not detected)";
       $("#login-status").innerHTML =
-        `<span class="text-emerald-600 font-medium">✓ Session restored as ${res.username}</span>`;
-      await loadUserBoards();
+        `<span class="text-emerald-600 font-medium">✓ Session restored ${who}</span>`;
+      if (res.username) await loadUserBoards();
     }
   }
   updateNav();
