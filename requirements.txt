@@ -1,0 +1,10 @@
+# Pinterest Picture Books
+# Core dependencies. Install with:  pip install -r requirements.txt
+py3-pinterest>=2.0.0   # Pinterest API wrapper (bstoilov/py3-pinterest)
+eel>=0.16.0            # Python <-> HTML/JS desktop bridge
+requests>=2.28.0       # image downloading (also pulled in by py3-pinterest)
+
+# py3-pinterest pulls in selenium + webdriver-manager, which power both
+# pinterest.login() (headless Chrome cookie harvesting) and the optional
+# "Save as PDF" export. A Chrome/Chromium install is required for those two
+# features only; everything else works without a browser.

@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinterest Picture Books</title>
+
+  <!-- Eel bridge -->
+  <script type="text/javascript" src="/eel.js"></script>
+  <!-- Tailwind Play CDN (no build step) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { brand: '#e60023' } } }
+    };
+  </script>
+
+  <!-- Book stylesheet is injected at runtime from Python (get_book_css) -->
+  <style id="book-css"></style>
+
+  <style>
+    html, body { height: 100%; }
+    body { background: #f8fafc; }
+
+    /* On-screen page presentation (reset for print below). */
+    #book .book-page {
+      box-shadow: 0 4px 20px rgba(0,0,0,.12);
+      margin: 0 auto 26px auto;
+      outline: 1px solid #e5e7eb;
+    }
+
+    /* Print: show only the book, unscaled, one page per sheet. */
+    @media print {
+      body * { visibility: hidden !important; }
+      #print-root, #print-root * { visibility: visible !important; }
+      #print-root {
+        position: absolute; left: 0; top: 0; margin: 0; padding: 0;
+        transform: none !important;
+      }
+      #book { transform: none !important; zoom: 1 !important; }
+      #preview-meta, #preview-empty { display: none !important; }
+      #book .book-page {
+        box-shadow: none !important; outline: none !important; margin: 0 !important;
+      }
+    }
+  </style>
+  <!-- @page size is written here dynamically to match the chosen page size -->
+  <style id="print-page"></style>
+</head>
+
+<body class="text-slate-800">
+  <div class="flex flex-col h-screen">
+
+    <!-- ===================== Tab header ===================== -->
+    <header class="bg-white border-b border-slate-200 px-6 pt-4">
+      <div class="flex items-center gap-2">
+        <span class="text-brand font-black text-xl tracking-tight mr-4">📌 Picture Books</span>
+        <nav id="tabs" class="flex gap-2"></nav>
+      </div>
+    </header>
+
+    <!-- ===================== Tab panels ===================== -->
+    <main class="flex-1 overflow-hidden">
+
+      <!-- Tab 1: Login -->
+      <section data-panel="1" class="h-full overflow-auto p-8">
+        <div class="max-w-md mx-auto mt-10 bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+          <h2 class="text-2xl font-bold mb-1">Log in to Pinterest</h2>
+          <p class="text-slate-500 text-sm mb-6">
+            Optional — logging in lets us list <em>your</em> boards. You can also
+            skip this and add public boards by URL, or work from data you've
+            already downloaded.
+          </p>
+          <label class="block text-sm font-medium mb-1">Email</label>
+          <input id="login-email" type="email" autocomplete="username"
+                 class="w-full mb-4 rounded-lg border border-slate-300 px-3 py-2 focus:ring-2 focus:ring-brand outline-none"
+                 placeholder="you@example.com">
+          <label class="block text-sm font-medium mb-1">Password</label>
+          <input id="login-password" type="password" autocomplete="current-password"
+                 class="w-full mb-6 rounded-lg border border-slate-300 px-3 py-2 focus:ring-2 focus:ring-brand outline-none"
+                 placeholder="••••••••">
+          <button id="login-btn"
+                  class="w-full bg-brand hover:bg-red-700 text-white font-semibold rounded-lg py-2.5 transition">
+            Log in
+          </button>
+          <div id="login-status" class="mt-4 text-sm"></div>
+        </div>
+      </section>
+
+      <!-- Tab 2: Boards -->
+      <section data-panel="2" class="hidden h-full overflow-auto p-8">
+        <div class="max-w-3xl mx-auto">
+          <h2 class="text-2xl font-bold mb-4">Your boards</h2>
+
+          <!-- Add by URL -->
+          <div class="flex gap-2 mb-6">
+            <input id="board-url" type="url"
+                   class="flex-1 rounded-lg border border-slate-300 px-3 py-2 focus:ring-2 focus:ring-brand outline-none"
+                   placeholder="Paste a board URL, e.g. https://…/username/board-name/">
+            <button id="add-url-btn"
+                    class="bg-slate-800 hover:bg-slate-900 text-white font-medium rounded-lg px-4">
+              Add board
+            </button>
+          </div>
+
+          <!-- Selection controls -->
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-sm text-slate-500">
+              <span id="board-count">0</span> boards ·
+              <a id="select-all" class="text-brand cursor-pointer">select all</a> ·
+              <a id="select-none" class="text-brand cursor-pointer">none</a>
+            </div>
+            <button id="refresh-boards" class="text-sm text-slate-500 hover:text-slate-800">↻ Refresh my boards</button>
+          </div>
+
+          <!-- Board list -->
+          <ul id="board-list" class="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 mb-6"></ul>
+
+          <button id="smart-download-btn"
+                  class="w-full bg-brand hover:bg-red-700 text-white font-semibold rounded-lg py-3 transition">
+            ⚡ Smart Download selected boards
+          </button>
+          <p class="text-xs text-slate-400 mt-2 text-center">
+            Only pins added since your last download are fetched — duplicates are skipped.
+          </p>
+        </div>
+      </section>
+
+      <!-- Tab 3: Books -->
+      <section data-panel="3" class="hidden h-full overflow-hidden">
+        <div class="flex h-full">
+
+          <!-- Left: options -->
+          <aside class="w-80 shrink-0 bg-white border-r border-slate-200 overflow-auto p-5">
+            <h2 class="text-lg font-bold mb-4">Book options</h2>
+
+            <label class="block text-sm font-medium mb-1">Content</label>
+            <select id="opt-source" class="w-full mb-3 rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+              <option value="shuffle_all">Shuffle all boards</option>
+              <option value="select">Select from boards…</option>
+            </select>
+            <div id="board-picker" class="hidden mb-3 max-h-40 overflow-auto rounded-lg border border-slate-200 p-2"></div>
+
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label class="block text-sm font-medium mb-1">Page size</label>
+                <select id="opt-page-size" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+                  <option value="a4">A4</option>
+                  <option value="letter">Letter</option>
+                  <option value="a5">A5</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Orientation</label>
+                <select id="opt-orientation" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+                  <option value="portrait">Portrait</option>
+                  <option value="landscape">Landscape</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label class="block text-sm font-medium mb-1">Columns: <span id="cols-val">3</span></label>
+                <input id="opt-columns" type="range" min="1" max="6" value="3" class="w-full accent-brand">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Order</label>
+                <select id="opt-order" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                  <option value="shuffle">Shuffle</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label class="block text-sm font-medium mb-1">Gutter (mm)</label>
+                <input id="opt-gutter" type="number" min="0" max="30" value="4"
+                       class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Margin (mm)</label>
+                <input id="opt-margin" type="number" min="0" max="40" value="10"
+                       class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Max images</label>
+                <input id="opt-max" type="number" min="0" value="0" placeholder="0 = all"
+                       class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Max / page</label>
+                <input id="opt-per-page" type="number" min="0" value="0" placeholder="auto"
+                       class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+              </div>
+            </div>
+
+            <div class="space-y-2 mb-4 text-sm">
+              <label class="flex items-center gap-2"><input id="opt-crop" type="checkbox" class="accent-brand"> Crop images to fill</label>
+              <label class="flex items-center gap-2"><input id="opt-titles" type="checkbox" class="accent-brand"> Show titles</label>
+              <label class="flex items-center gap-2"><input id="opt-files" type="checkbox" class="accent-brand"> Show file names</label>
+              <label class="flex items-center gap-2"><input id="opt-dates" type="checkbox" class="accent-brand"> Show dates</label>
+              <label class="flex items-center gap-2"><input id="opt-board" type="checkbox" class="accent-brand"> Show board name</label>
+              <label class="flex items-center gap-2"><input id="opt-pagenums" type="checkbox" checked class="accent-brand"> Page numbers</label>
+              <label class="flex items-center gap-2"><input id="opt-cover" type="checkbox" class="accent-brand"> Add cover page</label>
+            </div>
+
+            <div id="cover-fields" class="hidden mb-4">
+              <input id="opt-title" type="text" value="My Picture Book"
+                     class="w-full mb-2 rounded-lg border border-slate-300 px-2 py-1.5 text-sm" placeholder="Book title">
+              <input id="opt-subtitle" type="text"
+                     class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm" placeholder="Subtitle (optional)">
+            </div>
+
+            <button id="build-btn"
+                    class="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold rounded-lg py-2.5 mb-2 transition">
+              ↻ Update preview
+            </button>
+            <div class="grid grid-cols-2 gap-2">
+              <button id="print-btn"
+                      class="bg-brand hover:bg-red-700 text-white font-semibold rounded-lg py-2.5 transition">🖨 Print</button>
+              <button id="pdf-btn"
+                      class="bg-white border border-slate-300 hover:bg-slate-50 font-semibold rounded-lg py-2.5 transition">⬇ Save PDF</button>
+            </div>
+          </aside>
+
+          <!-- Right: preview -->
+          <div class="flex-1 overflow-auto bg-slate-100 p-6">
+            <div id="preview-meta" class="text-sm text-slate-500 mb-3 text-center"></div>
+            <div id="print-root">
+              <div id="book"></div>
+            </div>
+            <div id="preview-empty" class="text-center text-slate-400 mt-24">
+              Choose your options and press <strong>Update preview</strong>.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ===================== Bottom nav ===================== -->
+    <footer class="bg-white border-t border-slate-200 px-6 py-3 flex items-center justify-between">
+      <button id="back-btn" class="px-5 py-2 rounded-lg border border-slate-300 font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">← Back</button>
+      <div class="flex gap-2">
+        <button id="skip-btn" class="px-5 py-2 rounded-lg text-slate-500 font-medium hover:bg-slate-100">Skip →</button>
+        <button id="next-btn" class="px-6 py-2 rounded-lg bg-brand text-white font-semibold hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed">Next →</button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toasts" class="fixed bottom-20 right-6 flex flex-col gap-2 z-50 w-80"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

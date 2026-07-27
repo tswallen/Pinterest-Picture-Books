@@ -1,0 +1,8 @@
+{
+  "base_url": "https://www.pinterest.com",
+  "login_url": "https://www.pinterest.com/login",
+  "cred_root": "data",
+  "output_dir": "output",
+  "image_server_port": 8123,
+  "eel_port": 8000
+}
