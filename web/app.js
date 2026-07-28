@@ -283,6 +283,7 @@ function renderBoardPicker() {
 }
 
 async function buildBook() {
+  await ensureBookCss(); // guarantees tile positioning rules are present
   const options = collectOptions();
   const btn = $("#build-btn");
   btn.disabled = true;
@@ -367,10 +368,25 @@ function wire() {
   eel.expose(download_done, "download_done");
 }
 
+// Load the book stylesheet (absolute-positioning rules for pages/tiles) from
+// Python and inject it. Without this, tiles fall back to block flow — one
+// column that overflows the pages — so the preview MUST have it before render.
+async function ensureBookCss() {
+  if (App.bookCss) return true;
+  const res = await eel.get_book_css()();
+  if (res && res.ok) {
+    App.bookCss = res.css;
+    document.getElementById("book-css").textContent = res.css;
+    return true;
+  }
+  return false;
+}
+
 async function boot() {
   renderTabs();
   wire();
   updateNav();
+  await ensureBookCss();
   const res = await eel.init_app()();
   if (res && res.ok) {
     App.downloaded = res.downloaded || [];
